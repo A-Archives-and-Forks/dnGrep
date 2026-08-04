@@ -206,12 +206,14 @@ namespace dnGREP.WPF
             }
         }
 
-        public static IList<FontInfo> FontFamilies
+        private static readonly Lazy<IList<FontInfo>> s_fontFamilies = new(
+            () => [.. Fonts.SystemFontFamilies.Select(r => new FontInfo(r.Source)).OrderBy(r => r.FamilyName)]);
+
+        public static IList<FontInfo> FontFamilies => s_fontFamilies.Value;
+
+        public static void PrewarmFontFamilies()
         {
-            get
-            {
-                return [.. Fonts.SystemFontFamilies.Select(r => new FontInfo(r.Source)).OrderBy(r => r.FamilyName)];
-            }
+            _ = FontFamilies;
         }
 
         public static IList<FontWeight> FontWeightList
