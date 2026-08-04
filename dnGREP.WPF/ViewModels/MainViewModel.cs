@@ -174,6 +174,8 @@ namespace dnGREP.WPF
 
                 GrepSearchResultsViewModel.SearchResultsMessenger.Register<SortColumnRequest>(
                     "SortColumn", OnSortColumnRequested);
+
+                System.Threading.Tasks.Task.Run(OptionsViewModel.PrewarmFontFamilies);
             }
         }
 
