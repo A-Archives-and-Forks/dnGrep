@@ -669,31 +669,93 @@ namespace dnGREP.Common
 
         public static bool IsBinary(Stream stream)
         {
-            bool result = false;
             try
             {
                 byte[] buffer = new byte[1024];
                 int count = stream.Read(buffer, 0, buffer.Length);
-                for (int i = 0; i < count - 3; i++)
+                if (count == 0)
+                    return false;
+
+                // --- BOM detection: unambiguously text ---
+                // UTF-32 LE must be checked before UTF-16 LE because FF FE 00 00
+                // starts with the UTF-16 LE BOM prefix FF FE.
+                if (count >= 4 && buffer[0] == 0xFF && buffer[1] == 0xFE &&
+                                  buffer[2] == 0x00 && buffer[3] == 0x00)
+                    return false; // UTF-32 LE BOM
+
+                if (count >= 4 && buffer[0] == 0x00 && buffer[1] == 0x00 &&
+                                  buffer[2] == 0xFE && buffer[3] == 0xFF)
+                    return false; // UTF-32 BE BOM
+
+                if (count >= 2 && buffer[0] == 0xFF && buffer[1] == 0xFE)
+                    return false; // UTF-16 LE BOM
+
+                if (count >= 2 && buffer[0] == 0xFE && buffer[1] == 0xFF)
+                    return false; // UTF-16 BE BOM
+
+                if (count >= 3 && buffer[0] == 0xEF && buffer[1] == 0xBB && buffer[2] == 0xBF)
+                    return false; // UTF-8 BOM
+
+                // --- UTF-16 without BOM heuristic (ASCII-heavy content) ---
+                // Count null bytes at even vs. odd byte positions. For ASCII-heavy
+                // UTF-16 LE, ~50% of bytes are null and they fall at odd positions.
+                // For UTF-16 BE they fall at even positions.
+                // This heuristic is reliable for Latin/ASCII content but degrades for
+                // non-Latin scripts where code unit bytes are less predictable.
+                if (count >= 8 && (count & 1) == 0) // must be even length to be UTF-16
                 {
-                    // check for 4 consecutive nulls - 2 will give false positive on UTF-32 and some UTF-16
-                    if (buffer[i] == 0 && buffer[i + 1] == 0 && buffer[i + 2] == 0 && buffer[i + 3] == 0)
+                    int nullsAtEven = 0, nullsAtOdd = 0, nonNulls = 0;
+                    for (int i = 0; i < count; i++)
                     {
-                        result = true;
-                        break;
+                        if (buffer[i] == 0x00)
+                        {
+                            if ((i & 1) == 0) nullsAtEven++;
+                            else nullsAtOdd++;
+                        }
+                        else
+                        {
+                            nonNulls++;
+                        }
+                    }
+
+                    int totalNulls = nullsAtEven + nullsAtOdd;
+
+                    // Require: enough nulls to be meaningful (>= 20% of bytes),
+                    // and >= 90% of those nulls concentrated at one parity.
+                    if (totalNulls >= count / 5)
+                    {
+                        if (nullsAtOdd >= totalNulls * 9 / 10) return false; // UTF-16 LE (no BOM)
+                        if (nullsAtEven >= totalNulls * 9 / 10) return false; // UTF-16 BE (no BOM)
                     }
                 }
+
+                // --- Any NUL byte in a non-BOM, non-UTF-16 file = binary ---
+                // Valid UTF-8 and ASCII never contain 0x00.
+                // ReadOnlySpan.IndexOf uses SIMD intrinsics — scans 1 KB in nanoseconds.
+                var span = new ReadOnlySpan<byte>(buffer, 0, count);
+                if (span.IndexOf((byte)0x00) >= 0)
+                    return true;
+
+                // --- Non-textual C0 control characters ---
+                // Excludes legitimate text controls: TAB (0x09), LF (0x0A), CR (0x0D).
+                for (int i = 0; i < count; i++)
+                {
+                    byte b = buffer[i];
+                    if ((b >= 0x01 && b <= 0x08) || b == 0x0B || b == 0x0C ||
+                        (b >= 0x0E && b <= 0x1F) || b == 0x7F)
+                        return true;
+                }
+
+                return false;
             }
             catch
             {
-                result = false;
+                return false;
             }
             finally
             {
-                // reset the stream back to the beginning
                 stream.Seek(0, SeekOrigin.Begin);
             }
-            return result;
         }
 
         public static bool IsRTL(string srcFile, Encoding encoding)
